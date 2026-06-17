@@ -7,15 +7,17 @@ interface OrderStore {
   orders: Order[]
   orderItems: Map<string, OrderItem[]>
   loading: boolean
-  fetchOrders: () => Promise<void>
-  fetchOrderItems: (orderId: string) => Promise<void>
+  fetchOrders: () => Promise<Order[]>
+  fetchOrderItems: (orderId: string) => Promise<OrderItem[]>
   createOrder: (order: Omit<Order, 'id' | 'shareToken' | 'createdAt' | 'updatedAt' | 'totalCost' | 'totalCharge'>, items: Omit<OrderItem, 'id' | 'orderId' | 'createdAt' | 'purchased'>[]) => Promise<string>
   updateOrder: (id: string, data: Partial<Order>) => Promise<void>
   updateOrderStatus: (id: string, status: OrderStatus) => Promise<void>
   deleteOrder: (id: string) => Promise<void>
-  updateOrderItem: (id: string, data: Partial<OrderItem>) => Promise<void>
+  updateOrderItem: (id: string, data: Partial<OrderItem>) => Promise<string | null>
+  updateOrderItems: (updates: { id: string; data: Partial<OrderItem> }[]) => Promise<string | null>
   addOrderItem: (orderId: string, item: Omit<OrderItem, 'id' | 'orderId' | 'createdAt' | 'purchased'>) => Promise<void>
   deleteOrderItem: (id: string) => Promise<void>
+  recalcOrderTotals: (orderId: string) => Promise<void>
 }
 
 export const useOrderStore = create<OrderStore>((set, get) => ({
@@ -27,6 +29,7 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     set({ loading: true })
     const orders = await db.orders.orderBy('createdAt').reverse().toArray()
     set({ orders, loading: false })
+    return orders
   },
 
   fetchOrderItems: async (orderId: string) => {
@@ -34,6 +37,7 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     const newMap = new Map(get().orderItems)
     newMap.set(orderId, items)
     set({ orderItems: newMap })
+    return items
   },
 
   createOrder: async (orderData, itemsData) => {
@@ -107,14 +111,33 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
 
   updateOrderItem: async (id, data) => {
     await db.orderItems.update(id, data)
-    const items = await db.orderItems.toArray()
-    const orderId = items.find(i => i.id === id)?.orderId
+    const updatedItem = await db.orderItems.get(id)
+    if (!updatedItem) return null
+    const orderId = updatedItem.orderId
+    const freshItems = await db.orderItems.where('orderId').equals(orderId).toArray()
+    const newMap = new Map(get().orderItems)
+    newMap.set(orderId, freshItems)
+    set({ orderItems: newMap })
+    return orderId
+  },
+
+  updateOrderItems: async (updates) => {
+    if (updates.length === 0) return null
+    let orderId: string | null = null
+    for (const u of updates) {
+      await db.orderItems.update(u.id, u.data)
+      if (!orderId) {
+        const item = await db.orderItems.get(u.id)
+        if (item) orderId = item.orderId
+      }
+    }
     if (orderId) {
-      const orderItems = items.filter(i => i.orderId === orderId)
+      const freshItems = await db.orderItems.where('orderId').equals(orderId).toArray()
       const newMap = new Map(get().orderItems)
-      newMap.set(orderId, orderItems)
+      newMap.set(orderId, freshItems)
       set({ orderItems: newMap })
     }
+    return orderId
   },
 
   addOrderItem: async (orderId, itemData) => {
@@ -139,6 +162,27 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     const items = await db.orderItems.where('orderId').equals(item.orderId).toArray()
     const newMap = new Map(get().orderItems)
     newMap.set(item.orderId, items)
+    set({ orderItems: newMap })
+  },
+
+  recalcOrderTotals: async (orderId) => {
+    const order = await db.orders.get(orderId)
+    if (!order) return
+    const items = await db.orderItems.where('orderId').equals(orderId).toArray()
+    const totalCost = items.reduce((sum, item) => {
+      const unitCost = (item.actualPrice ?? 0) + (item.taxAmount ?? 0)
+      return sum + unitCost * item.quantity
+    }, 0)
+    const totalCharge = totalCost * order.exchangeRate * (1 + order.serviceFeeRate)
+    await db.orders.update(orderId, { totalCost, totalCharge, updatedAt: new Date() })
+    const updatedOrder = await db.orders.get(orderId)
+    if (updatedOrder) {
+      set(state => ({
+        orders: state.orders.map(o => o.id === orderId ? updatedOrder : o),
+      }))
+    }
+    const newMap = new Map(get().orderItems)
+    newMap.set(orderId, items)
     set({ orderItems: newMap })
   },
 }))

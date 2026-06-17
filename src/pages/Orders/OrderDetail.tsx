@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { calculateCharge, calculateOrderCost } from '@/utils/calc'
 import { formatCurrency, formatDate } from '@/utils/format'
 import { cn } from '@/lib/utils'
+import type { OrderItem } from '@/types'
 
 const STEPS = ['待采购', '已采购', '待付款', '已付款', '已发货', '已完成']
 const STEP_KEYS = ['pending_purchase', 'purchased', 'pending_payment', 'paid', 'shipped', 'completed']
@@ -19,7 +20,7 @@ interface EditRow {
 export default function OrderDetail() {
   const { orderId } = useParams<{ orderId: string }>()
   const navigate = useNavigate()
-  const { orders, orderItems, fetchOrders, fetchOrderItems, updateOrderStatus, updateOrderItem, updateOrder } = useOrderStore()
+  const { orders, orderItems, fetchOrders, fetchOrderItems, updateOrderStatus, updateOrderItem, updateOrderItems, updateOrder, recalcOrderTotals } = useOrderStore()
   const { customers, fetchCustomers } = useCustomerStore()
   const { settings } = useSettingsStore()
 
@@ -83,21 +84,24 @@ export default function OrderDetail() {
 
   const saveBulkEdit = async () => {
     if (!orderId) return
+    const updates: { id: string; data: Partial<OrderItem> }[] = []
     for (const item of items) {
       const row = editRows[item.id]
       if (!row) continue
-      const updates: Record<string, number | boolean> = {}
-      if (row.actualPrice !== '') updates.actualPrice = Number(row.actualPrice)
-      if (row.taxAmount !== '') updates.taxAmount = Number(row.taxAmount)
-      const ap = row.actualPrice !== '' ? Number(row.actualPrice) : null
-      if (ap != null && ap > 0) updates.purchased = true
-      await updateOrderItem(item.id, updates)
+      const data: Partial<OrderItem> = {}
+      if (row.actualPrice !== '') {
+        data.actualPrice = Number(row.actualPrice)
+        data.purchased = Number(row.actualPrice) > 0
+      }
+      if (row.taxAmount !== '') data.taxAmount = Number(row.taxAmount)
+      if (Object.keys(data).length > 0) {
+        updates.push({ id: item.id, data })
+      }
     }
-    await fetchOrderItems(orderId)
-    const updatedItems = orderItems.get(orderId) ?? items
-    const cost = calculateOrderCost(updatedItems)
-    const charge = calculateCharge(cost, order!.exchangeRate, order!.serviceFeeRate)
-    await updateOrder(order!.id, { totalCost: cost, totalCharge: charge })
+    if (updates.length > 0) {
+      await updateOrderItems(updates)
+    }
+    await recalcOrderTotals(orderId)
     setBulkEditMode(false)
     setEditRows({})
   }
@@ -118,19 +122,17 @@ export default function OrderDetail() {
   }
 
   const saveSingleEdit = async (itemId: string) => {
-    const updates: Record<string, number | boolean> = {}
-    if (singleEdit.actualPrice !== '') updates.actualPrice = Number(singleEdit.actualPrice)
-    if (singleEdit.taxAmount !== '') updates.taxAmount = Number(singleEdit.taxAmount)
-    const ap = singleEdit.actualPrice !== '' ? Number(singleEdit.actualPrice) : null
-    if (ap != null && ap > 0) updates.purchased = true
-    await updateOrderItem(itemId, updates)
-    if (orderId) {
-      await fetchOrderItems(orderId)
-      const updatedItems = orderItems.get(orderId) ?? items
-      const cost = calculateOrderCost(updatedItems)
-      const charge = calculateCharge(cost, order!.exchangeRate, order!.serviceFeeRate)
-      await updateOrder(order!.id, { totalCost: cost, totalCharge: charge })
+    if (!orderId) return
+    const data: Partial<OrderItem> = {}
+    if (singleEdit.actualPrice !== '') {
+      data.actualPrice = Number(singleEdit.actualPrice)
+      data.purchased = Number(singleEdit.actualPrice) > 0
     }
+    if (singleEdit.taxAmount !== '') data.taxAmount = Number(singleEdit.taxAmount)
+    if (Object.keys(data).length > 0) {
+      await updateOrderItem(itemId, data)
+    }
+    await recalcOrderTotals(orderId)
     setEditingItemId(null)
     setSingleEdit({ actualPrice: '', taxAmount: '' })
   }
@@ -156,11 +158,7 @@ export default function OrderDetail() {
 
   const handleGenerateBill = async () => {
     if (!orderId) return
-    await fetchOrderItems(orderId)
-    const updatedItems = orderItems.get(orderId) ?? items
-    const cost = calculateOrderCost(updatedItems)
-    const charge = calculateCharge(cost, order.exchangeRate, order.serviceFeeRate)
-    await updateOrder(order.id, { totalCost: cost, totalCharge: charge })
+    await recalcOrderTotals(orderId)
     if (order.status === 'purchased') {
       await updateOrderStatus(order.id, 'pending_payment')
     }
