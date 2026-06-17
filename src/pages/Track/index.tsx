@@ -11,18 +11,18 @@ const STEPS = ['待采购', '已采购', '待付款', '已付款', '已发货', 
 const STEP_KEYS = ['pending_purchase', 'purchased', 'pending_payment', 'paid', 'shipped', 'completed']
 
 export default function Track() {
-  const { shareToken } = useParams<{ shareToken: string }>()
+  const { token } = useParams<{ token: string }>()
   const [order, setOrder] = useState<Order | null>(null)
   const [items, setItems] = useState<OrderItem[]>([])
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [sellerName, setSellerName] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
-    if (!shareToken) return
+    if (!token) { setLoaded(true); return }
     ;(async () => {
-      const o = await db.orders.where('shareToken').equals(shareToken).first()
-      if (!o) { setLoading(false); return }
+      const o = await db.orders.where('shareToken').equals(token).first()
+      if (!o) { setLoaded(true); return }
       setOrder(o)
       const [oi, c, s] = await Promise.all([
         db.orderItems.where('orderId').equals(o.id).toArray(),
@@ -32,11 +32,11 @@ export default function Track() {
       setItems(oi)
       setCustomer(c ?? null)
       setSellerName(s?.sellerName ?? '')
-      setLoading(false)
+      setLoaded(true)
     })()
-  }, [shareToken])
+  }, [token])
 
-  if (loading) {
+  if (!loaded) {
     return (
       <div className="min-h-screen bg-[#f5f3ef] flex items-center justify-center" style={{ fontFamily: "'Noto Sans SC', sans-serif" }}>
         <Package className="w-8 h-8 text-[#d4a853] animate-pulse" />
@@ -44,10 +44,12 @@ export default function Track() {
     )
   }
 
-  if (!order) {
+  if (!order || !token) {
     return (
-      <div className="min-h-screen bg-[#f5f3ef] flex items-center justify-center text-gray-400" style={{ fontFamily: "'Noto Sans SC', sans-serif" }}>
-        订单不存在
+      <div className="min-h-screen bg-[#f5f3ef] flex flex-col items-center justify-center gap-3 py-16 px-4" style={{ fontFamily: "'Noto Sans SC', sans-serif" }}>
+        <Package className="w-12 h-12 text-gray-400" />
+        <div className="text-lg font-medium text-[#1e3a5f]">链接已失效或订单不存在</div>
+        <div className="text-sm text-gray-500">请向卖家索取最新的订单查询链接</div>
       </div>
     )
   }

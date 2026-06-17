@@ -9,7 +9,7 @@ class DaigouDB extends Dexie {
   settings!: Table<AppSettings>
 
   constructor() {
-    super('DaigouDB')
+    super('DaigouDB_v2')
     this.version(1).stores({
       customers: 'id, name, phone, wechat, createdAt',
       orders: 'id, customerId, tripId, status, orderDate, shareToken, createdAt',
